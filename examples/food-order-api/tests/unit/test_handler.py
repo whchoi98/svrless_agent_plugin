@@ -1,72 +1,72 @@
 import json
+import os
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hello_world import app
-
 
 @pytest.fixture()
-def apigw_event():
-    """ Generates API GW Event"""
-
+def create_order_event():
+    """POST /orders HTTP API v2 이벤트"""
     return {
-        "body": '{ "test": "body"}',
-        "resource": "/{proxy+}",
+        "version": "2.0",
+        "routeKey": "POST /orders",
+        "rawPath": "/orders",
+        "body": json.dumps({
+            "menu": "비빔밥",
+            "quantity": 2,
+            "customer": {"name": "홍길동", "phone": "010-1234-5678"},
+        }),
+        "isBase64Encoded": False,
         "requestContext": {
-            "resourceId": "123456",
-            "apiId": "1234567890",
-            "resourcePath": "/{proxy+}",
-            "httpMethod": "POST",
-            "requestId": "c6af9ac6-7b61-11e6-9a41-93e8deadbeef",
-            "accountId": "123456789012",
-            "identity": {
-                "apiKey": "",
-                "userArn": "",
-                "cognitoAuthenticationType": "",
-                "caller": "",
-                "userAgent": "Custom User Agent String",
-                "user": "",
-                "cognitoIdentityPoolId": "",
-                "cognitoIdentityId": "",
-                "cognitoAuthenticationProvider": "",
-                "sourceIp": "127.0.0.1",
-                "accountId": "",
-            },
-            "stage": "prod",
+            "http": {"method": "POST", "path": "/orders"},
+            "requestId": "test-request-id",
         },
-        "queryStringParameters": {"foo": "bar"},
-        "headers": {
-            "Via": "1.1 08f323deadbeefa7af34d5feb414ce27.cloudfront.net (CloudFront)",
-            "Accept-Language": "en-US,en;q=0.8",
-            "CloudFront-Is-Desktop-Viewer": "true",
-            "CloudFront-Is-SmartTV-Viewer": "false",
-            "CloudFront-Is-Mobile-Viewer": "false",
-            "X-Forwarded-For": "127.0.0.1, 127.0.0.2",
-            "CloudFront-Viewer-Country": "US",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Upgrade-Insecure-Requests": "1",
-            "X-Forwarded-Port": "443",
-            "Host": "1234567890.execute-api.us-east-1.amazonaws.com",
-            "X-Forwarded-Proto": "https",
-            "X-Amz-Cf-Id": "aaaaaaaaaae3VYQb9jd-nvCd-de396Uhbp027Y2JvkCPNLmGJHqlaA==",
-            "CloudFront-Is-Tablet-Viewer": "false",
-            "Cache-Control": "max-age=0",
-            "User-Agent": "Custom User Agent String",
-            "CloudFront-Forwarded-Proto": "https",
-            "Accept-Encoding": "gzip, deflate, sdch",
-        },
-        "pathParameters": {"proxy": "/examplepath"},
-        "httpMethod": "POST",
-        "stageVariables": {"baz": "qux"},
-        "path": "/examplepath",
     }
 
 
-def test_lambda_handler(apigw_event):
+@pytest.fixture()
+def get_order_event():
+    """GET /orders/{orderId} HTTP API v2 이벤트"""
+    return {
+        "version": "2.0",
+        "routeKey": "GET /orders/{orderId}",
+        "rawPath": "/orders/test-order-123",
+        "pathParameters": {"orderId": "test-order-123"},
+        "isBase64Encoded": False,
+        "requestContext": {
+            "http": {"method": "GET", "path": "/orders/test-order-123"},
+            "requestId": "test-request-id",
+        },
+    }
 
-    ret = app.lambda_handler(apigw_event, "")
-    data = json.loads(ret["body"])
 
-    assert ret["statusCode"] == 200
-    assert "message" in ret["body"]
-    assert data["message"] == "hello world"
+@patch.dict(os.environ, {"TABLE_NAME": "FoodOrders", "POWERTOOLS_SERVICE_NAME": "test"})
+@patch("boto3.resource")
+def test_create_order(mock_boto3, create_order_event):
+    mock_table = MagicMock()
+    mock_boto3.return_value.Table.return_value = mock_table
+
+    from src.order_handler import app
+
+    ret = app.lambda_handler(create_order_event, MagicMock())
+
+    assert ret["statusCode"] == 201
+    body = json.loads(ret["body"])
+    assert "orderId" in body
+    assert body["status"] == "CREATED"
+    mock_table.put_item.assert_called_once()
+
+
+@patch.dict(os.environ, {"TABLE_NAME": "FoodOrders", "POWERTOOLS_SERVICE_NAME": "test"})
+@patch("boto3.resource")
+def test_get_order_not_found(mock_boto3, get_order_event):
+    mock_table = MagicMock()
+    mock_table.get_item.return_value = {}
+    mock_boto3.return_value.Table.return_value = mock_table
+
+    from src.order_handler import app
+
+    ret = app.lambda_handler(get_order_event, MagicMock())
+
+    assert ret["statusCode"] == 404

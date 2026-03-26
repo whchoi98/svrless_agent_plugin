@@ -92,7 +92,9 @@ Python으로 음식 주문 REST API를 만들어줘.
 ```python
 # app.py — Lambda 핸들러
 import json
+import os
 import uuid
+
 import boto3
 from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.event_handler import APIGatewayHttpResolver
@@ -103,7 +105,7 @@ tracer = Tracer()
 app = APIGatewayHttpResolver()
 
 dynamodb = boto3.resource("dynamodb")
-table = dynamodb.Table("FoodOrders")
+table = dynamodb.Table(os.environ.get("TABLE_NAME", "FoodOrders"))
 
 
 @app.post("/orders")
@@ -120,8 +122,9 @@ def create_order():
         "status": "CREATED",
     }
     table.put_item(Item=item)
+    logger.info("Order created", extra={"order_id": order_id})
 
-    return {"statusCode": 201, "body": {"orderId": order_id}}
+    return {"statusCode": 201, "body": {"orderId": order_id, "status": "CREATED"}}
 
 
 @app.get("/orders/<order_id>")
@@ -212,10 +215,12 @@ Description: FoodOrder API
 
 Globals:
   Function:
-    Runtime: python3.13
+    Runtime: python3.9
     Timeout: 30
     MemorySize: 256
     Tracing: Active
+    Architectures:
+      - arm64
     Environment:
       Variables:
         TABLE_NAME: !Ref FoodOrdersTable
@@ -246,6 +251,7 @@ Resources:
   FoodOrdersTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       TableName: FoodOrders
       BillingMode: PAY_PER_REQUEST
@@ -260,17 +266,23 @@ Outputs:
   ApiEndpoint:
     Description: API Gateway endpoint URL
     Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  OrderFunction:
+    Description: Order Lambda Function ARN
+    Value: !GetAtt OrderFunction.Arn
 ```
 
 로컬 테스트용 이벤트 (`events/create_order.json`):
 
 ```json
 {
-  "httpMethod": "POST",
-  "path": "/orders",
+  "version": "2.0",
+  "routeKey": "POST /orders",
+  "rawPath": "/orders",
   "body": "{\"menu\": \"비빔밥\", \"quantity\": 2, \"customer\": {\"name\": \"홍길동\", \"phone\": \"010-1234-5678\"}}",
+  "isBase64Encoded": false,
   "requestContext": {
-    "http": { "method": "POST", "path": "/orders" }
+    "http": { "method": "POST", "path": "/orders" },
+    "requestId": "test-request-id"
   }
 }
 ```
